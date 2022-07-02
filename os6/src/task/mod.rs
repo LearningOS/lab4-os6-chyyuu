@@ -40,11 +40,11 @@ pub use processor::{
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
     let task = take_current_task().unwrap();
-
     // ---- access current TCB exclusively
     let mut task_inner = task.inner_exclusive_access();
     let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     // Change status to Ready
+    task_inner.task_stride += 10000000 / task_inner.task_priority;
     task_inner.task_status = TaskStatus::Ready;
     drop(task_inner);
     // ---- release current PCB
@@ -104,3 +104,97 @@ lazy_static! {
 pub fn add_initproc() {
     add_task(INITPROC.clone());
 }
+
+pub fn memory_alloc(start: usize, len: usize, port: usize) -> isize {
+    // println!("0x{:X} {}", start, len);
+    if len == 0 {
+        return 0;
+    }
+    if (len > 1073741824) || ((port & (!0x7)) != 0) || ((port & 0x7) == 0) || ((start % 4096) != 0) {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let mem_set = &mut inner.memory_set;
+    let l: VirtAddr = start.into();
+    let r: VirtAddr = (start + len).into();
+    let lvpn = l.floor();
+    let rvpn = r.ceil();
+    // println!("L:{:?} R:{:?}", L, R);
+    for area in &mem_set.areas {
+        // println!("{:?} {:?}", area.vpn_range.l, area.vpn_range.r);
+        if (lvpn <= area.vpn_range.get_start()) && (rvpn > area.vpn_range.get_start()) {
+            return -1;
+        }
+    }
+    let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
+    permission.set(MapPermission::U, true);
+    // inner.tasks[current].memory_set.insert_framed_area(start.into(), (start + len).into(), permission);
+    let mut start = start;
+    let end = start + len;
+    while start < end {
+        let mut endr = start + PAGE_SIZE;
+        if endr > end {
+            endr = end;
+        }
+        mem_set.insert_framed_area(start.into(), endr.into(), permission);
+        start = endr;
+    }
+    0
+}
+
+pub fn memory_free(start: usize, len: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    if start % 4096 != 0 {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let mem_set = &mut inner.memory_set;
+    let l: VirtAddr = start.into();
+    let r: VirtAddr = (start + len).into();
+    let lvpn = l.floor();
+    let rvpn = r.ceil();
+    let mut cnt = 0;
+    for area in &mem_set.areas {
+        if (lvpn <= area.vpn_range.get_start()) && (rvpn > area.vpn_range.get_start()) {
+            cnt += 1;
+        }
+    }
+    if cnt < rvpn.0-lvpn.0 {
+        return -1;
+    }
+    for i in 0..mem_set.areas.len() {
+        if !mem_set.areas.get(i).is_some() {
+            continue;
+        }
+        if (lvpn <= mem_set.areas[i].vpn_range.get_start()) && (rvpn > mem_set.areas[i].vpn_range.get_start()) {
+            mem_set.areas[i].unmap(&mut mem_set.page_table);
+            mem_set.areas.remove(i);
+        }
+    }
+    0
+}
+
+
+pub fn get_task_info() -> TaskInfo {
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    let new_info = TaskInfo {
+        status: inner.task_status,
+        syscall_times: inner.syscall_times,
+        time: get_time_us() / 1000 - inner.start_time,
+    };
+    drop(inner);
+    return new_info
+}
+
+pub fn set_task_priority(pri : usize) {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.task_priority = pri;
+    drop(task_inner);
+}
+

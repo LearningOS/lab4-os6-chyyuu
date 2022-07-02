@@ -9,6 +9,7 @@
 //! For clarity, each single syscall is implemented as its own function, named
 //! `sys_` then the name of the syscall. You can find functions like this in
 //! submodules, and you should also implement syscalls this way.
+use crate::task::current_task;
 
 const SYSCALL_UNLINKAT: usize = 35;
 const SYSCALL_LINKAT: usize = 37;
@@ -39,6 +40,11 @@ use crate::fs::Stat;
 
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
+    {
+        let task = current_task().unwrap();
+        let mut inner = task.inner_exclusive_access();
+        inner.syscall_times[syscall_id] += 1;
+    }
     match syscall_id {
         SYSCALL_LINKAT => sys_linkat(args[1] as *const u8, args[3] as *const u8),
         SYSCALL_UNLINKAT => sys_unlinkat(args[1] as *const u8),

@@ -12,6 +12,8 @@ use core::cell::RefMut;
 use crate::fs::{File, Stdin, Stdout};
 use alloc::string::String;
 use crate::mm::translated_refmut;
+use crate::timer::get_time_us;
+use crate::config::MAX_SYSCALL_NUM;
 
 /// Task control block structure
 ///
@@ -25,6 +27,26 @@ pub struct TaskControlBlock {
     // mutable
     inner: UPSafeCell<TaskControlBlockInner>,
 }
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        other.inner.exclusive_access().task_stride.cmp(&self.inner.exclusive_access().task_stride)
+    }
+}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl Eq for TaskControlBlock { }
 
 /// Structure containing more process content
 ///
@@ -49,6 +71,10 @@ pub struct TaskControlBlockInner {
     pub children: Vec<Arc<TaskControlBlock>>,
     /// It is set when active exit or execution error occurs
     pub exit_code: i32,
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub start_time: usize,
+    pub task_priority: usize,
+    pub task_stride: usize,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
 }
 
@@ -124,6 +150,10 @@ impl TaskControlBlock {
                         // 2 -> stderr
                         Some(Arc::new(Stdout)),
                     ],
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: get_time_us() / 1000,
+                    task_priority: 16,
+                    task_stride: 0,
                 })
             },
         };
@@ -200,6 +230,10 @@ impl TaskControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: get_time_us() / 1000,
+                    task_priority: 16,
+                    task_stride: 0,
                 })
             },
         });

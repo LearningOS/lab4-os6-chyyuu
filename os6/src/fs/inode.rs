@@ -1,6 +1,7 @@
 use easy_fs::{
     EasyFileSystem,
     Inode,
+    DiskInodeType,
 };
 use crate::drivers::BLOCK_DEVICE;
 use crate::sync::UPSafeCell;
@@ -10,6 +11,7 @@ use bitflags::*;
 use alloc::vec::Vec;
 use super::File;
 use crate::mm::UserBuffer;
+use crate::fs::{Stat, StatMode};
 
 /// A wrapper around a filesystem inode
 /// to implement File trait atop
@@ -142,6 +144,17 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
 impl File for OSInode {
     fn readable(&self) -> bool { self.readable }
     fn writable(&self) -> bool { self.writable }
+    fn stat(&self, st: &mut Stat) -> isize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.read_disk_inode(|disk_inode| {
+            st.mode = match disk_inode.type_ {
+                DiskInodeType::File => StatMode::FILE,
+                DiskInodeType::Directory => StatMode::DIR,
+            };
+            st.nlink = disk_inode.nlink;
+        });
+        0
+    }
     fn read(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.exclusive_access();
         let mut total_read_size = 0usize;
@@ -166,4 +179,15 @@ impl File for OSInode {
         }
         total_write_size
     }
+}
+
+pub fn link_file(oldname: &str, newname: &str) -> Option<()> {
+    if oldname == newname {
+        return None;
+    }
+    ROOT_INODE.link(oldname, newname)
+}
+
+pub fn unlink_file(name: &str) -> Option<()> {
+    ROOT_INODE.unlink(name)
 }
